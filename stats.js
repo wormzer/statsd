@@ -18,12 +18,19 @@ var counters = {
 var timers = {};
 var gauges = {};
 var sets = {};
+var super_sets = {};
 var counter_rates = {};
 var timer_data = {};
 var pctThreshold = null;
 var debugInt, flushInterval, keyFlushInt, server, mgmtServer;
 var startup_time = Math.round(new Date().getTime() / 1000);
 var backendEvents = new events.EventEmitter();
+
+var superSetIntervals = {
+  "daily": 24 * 60 * 60,
+  "hourly": 60 * 60,
+  "minutely": 60
+};
 
 // Load and init the backend from the backends/ directory.
 function loadBackend(config, name) {
@@ -52,6 +59,7 @@ function flushMetrics() {
     gauges: gauges,
     timers: timers,
     sets: sets,
+    super_sets: super_sets,
     counter_rates: counter_rates,
     timer_data: timer_data,
     pctThreshold: pctThreshold
@@ -74,6 +82,14 @@ function flushMetrics() {
       metrics.timers[key] = [];
     }
 
+    // Clear the super-sets
+    for (key in metrics.super_sets) {
+      super_set = metrics.super_sets[key]
+      if (time_stamp >= super_set.reset_time) {
+        super_set.set = new set.Set();
+        super_set.reset_time = Math.ceil(time_stamp / super_set.interval_time) * super_set.interval_time;
+      }
+    }
     // Clear the sets
     for (key in metrics.sets) {
       metrics.sets[key] = new set.Set();
@@ -166,8 +182,29 @@ config.configFile(process.argv[2], function (config, oldConfig) {
           } else if (fields[1].trim() == "s") {
             if (! sets[key]) {
               sets[key] = new set.Set();
+
+              // see if setting up a timed interval (super)set is appropriate
+              key_end = key.match(/\.([^.]+)$/);
+              if (key_end != null && key_end[1] in superSetIntervals) {
+                var interval_time = superSetIntervals[key_end[1]]
+                var now = Math.round(new Date().getTime() / 1000);
+
+                super_sets[key] = {
+                  reset_time: Math.ceil(now / interval_time) * interval_time,
+                  interval_time: interval_time,
+                  set: new set.Set()
+                };
+              }
             }
-            sets[key].insert(fields[0] || '0');
+            super_set = super_sets[key];
+            field = fields[0] || '0';
+            if (!super_set || !super_set.set.has(field)) {
+              sets[key].insert(field)
+
+              if (super_set) {
+                super_set.set.insert(field);
+              }
+            }
           } else {
             if (fields[2]) {
               if (fields[2].match(/^@([\d\.]+)/)) {
